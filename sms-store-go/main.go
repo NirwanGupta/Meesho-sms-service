@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/segmentio/kafka-go"
 	"go.mongodb.org/mongo-driver/bson"
@@ -30,7 +31,7 @@ func main() {
 
 	http.HandleFunc("/v1/user/", getHistory)
 
-	fmt.Println("Go Service running on :8082")
+	fmt.Println("Go SMS Store running on :8082")
 	log.Fatal(http.ListenAndServe(":8082", nil))
 }
 
@@ -40,21 +41,32 @@ func startKafkaConsumer() {
 		Topic:   "sms-log-topic",
 		GroupID: "sms-store-group",
 	})
-
 	for {
-		m, _ := reader.ReadMessage(context.Background())
+		m, err := reader.ReadMessage(context.Background())
+		if err != nil {
+			log.Println("Kafka Error:", err)
+			continue
+		}
 		var record SmsRecord
 		json.Unmarshal(m.Value, &record)
 		collection.InsertOne(context.TODO(), record)
-		if(record.PhoneNumber != "") {
-			fmt.Printf("What the FUCK!!\n")
-			fmt.Printf("Saved SMS for %s to MongoDB\n", record.PhoneNumber)
-		}
+		fmt.Printf("Logged SMS for %s\n", record.PhoneNumber)
 	}
 }
 
 func getHistory(w http.ResponseWriter, r *http.Request) {
-	phone := r.URL.Path[len("/v1/user/"):len(r.URL.Path)-len("/messages")]
+	path := r.URL.Path
+	if !strings.HasSuffix(path, "/messages") {
+		http.Error(w, "Use /v1/user/{phone}/messages", http.StatusNotFound)
+		return
+	}
+
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) < 3 {
+		http.Error(w, "Invalid Path", http.StatusBadRequest)
+		return
+	}
+	phone := segments[2]
 
 	cursor, _ := collection.Find(context.TODO(), bson.M{"phoneNumber": phone})
 	var results []SmsRecord
